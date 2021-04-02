@@ -64,6 +64,12 @@ async function createWebServices(settings, secrets, plugins)
 				app.use("/user", express.static("./user/data", {
 					etag: false
 				}));
+				app.use("/overlays", express.static("./user/overlays", {
+					etag: false
+				}));
+				app.use("/widgets", express.static("./src/widgets", {
+					etag: false
+				}));
 			});
 		},
 		startWebsockets: () =>

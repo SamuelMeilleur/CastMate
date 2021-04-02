@@ -1,0 +1,31 @@
+<html>
+
+<head>
+	<script src="https://unpkg.com/riot@4/riot+compiler.min.js"></script>
+	<script src="js/widget-bridge.js"> </script>
+</head>
+
+<body>
+	<widget />
+	<script>
+		const urlParams = new URLSearchParams(window.location.search);
+		const widgetName = urlParams.get('widget');
+
+		widget.init();
+
+		var xhttp = new XMLHttpRequest();
+		xhttp.onreadystatechange = function ()
+		{
+			if (this.readyState == 4 && this.status == 200)
+			{
+				const { code } = riot.compileFromString(this.responseText);
+				riot.inject(code, 'widget', './widget.html');
+				riot.mount('widget', widget.params);
+			}
+		};
+		xhttp.open("GET", `/widgets/${widgetName}/widget.riot`, true);
+		xhttp.send();
+	</script>
+</body>
+
+</html>
