@@ -1,11 +1,11 @@
 <widget>
 
-<p> Hello World </p>
+<p> Hello World { state.testVar} </p>
 
 <script>
 export default {
 	onMounted() {
-		console.log("Hello!");
+		this.requestState(['testVar'])
 	}
 }
 </script>

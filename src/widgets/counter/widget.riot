@@ -1,0 +1,13 @@
+<widget>
+<p> <span if={this.props.label}> { this.props.label } : </span> { state[this.props.variable] } </p>
+
+<script>
+export default {
+	onMounted() {
+		console.log("Counter props", this.props)
+		this.requestState([this.props.variable])
+	}
+}
+</script>
+
+</widget>

@@ -1,48 +1,259 @@
 <html>
 
 <head>
-	<script src="https://code.jquery.com/jquery-3.5.1.min.js" integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
-	<script src="https://unpkg.com/riot@4/riot+compiler.min.js"></script>
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/yamljs/0.3.0/yaml.min.js" integrity="sha512-f/K0Q5lZ1SrdNdjc2BO2I5kTx8E5Uw1EU3PhSUB9fYPohap5rPWEmQRCjtpDxNmQB4/+MMI/Cf+nvh1VSiwrTA==" crossorigin="anonymous"></script>
-	<script src="/widgets/js/overlay-bridge.js"></script>
-	<script>
-
-		const urlParams = new URLSearchParams(window.location.search);
-		const overlayName = urlParams.get('overlay');
-
-		let overlayData = null;
-
-		$.ajax({
-			url: `/overlays/${overlayName}.yaml`,
-			async: false,
-		}).done((data) =>
-		{
-			overlayData = YAML.parse(data);
-			console.log(overlayData);
-
-			$(document).ready(function ()
-			{
-				for (let widget of overlayData)
-				{
-					let name = widget.name;
-
-					let frame = $("<iframe></iframe>").addClass('widget-container').css({
-						position: 'absolute',
-						left: widget.position.x,
-						top: widget.position.y,
-						width: widget.position.width,
-						height: widget.position.height
-					}).attr('src', `/widgets/widget.html?widget=${name}`)
-					$(document.body).append(frame)
-				}
-			});
-		});
-
-
-	</script>
+	<style>
+		.widget-container {
+			border: 0;
+		}
+	</style>
 </head>
 
 <body>
+	<script>
+		async function getOverlayData(overlayName)
+		{
+			const promise = new Promise((resolve, reject) =>
+			{
+				var xhttp = new XMLHttpRequest();
+				xhttp.onreadystatechange = function ()
+				{
+					if (this.readyState == 4)
+					{
+						if (this.status == 200)
+						{
+							try
+							{
+								resolve(YAML.parse(this.responseText))
+							}
+							catch (err)
+							{
+								reject(err)
+							}
+						}
+						else
+						{
+							reject(new Error(`Received status ${this.status}`));
+						}
+					}
+
+				};
+				xhttp.open("GET", `/overlays/${overlayName}.yaml`, true);
+				xhttp.send();
+			})
+			return promise;
+		}
+
+
+		class OverlayBridge
+		{
+			constructor()
+			{
+				this.state = {}
+				this.events = {}
+				this.callbacks = {}
+				this.widgets = [];
+
+				window.addEventListener('message', (event) =>
+				{
+					if (event.data.stateDependencies)
+					{
+						for (let stateVar of event.data.stateDependencies)
+						{
+							this.addDependency(stateVar, event.source);
+						}
+					}
+					else if ("params" in event.data)
+					{
+						let widget = this.widgets.find((w) => w.contentWindow == event.source);
+
+						if (!widget)
+						{
+							console.log("Unable to match widget")
+							return;
+						}
+
+						event.source.postMessage({ params: widget.castMate.params });
+					}
+				})
+			}
+
+			addDependency(variableName, source)
+			{
+				if (variableName in this.state)
+				{
+					this.state[variableName].sources.add(source);
+				}
+				else
+				{
+					let newDep = {
+						sources: new Set()
+					}
+					newDep.sources.add(source);
+					this.state[variableName] = newDep;
+				}
+
+				//Todo: Do this all at once?
+				this.socket.send(JSON.stringify({
+					state: [variableName]
+				}))
+			}
+
+			addEvent(eventName, source)
+			{
+				if (eventName in this.events)
+				{
+					this.events[eventName].sources.add(source);
+				}
+				else
+				{
+					let newDep = {
+						sources: new Set()
+					}
+					newDep.sources.add(source);
+					this.events[eventName] = newDep;
+				}
+			}
+
+			connect()
+			{
+				// TODO: This address needs to be dynamic!
+				this.socket = new WebSocket(`ws://${window.location.host}`);
+
+				this.socket.addEventListener('message', (event) =>
+				{
+					let msg = JSON.parse(event.data);
+
+					if ("state" in msg)
+					{
+						for (let varName in msg.state)
+						{
+							console.log(`Received New ${varName} State: `, msg.state[varName])
+							if (varName in this.state)
+							{
+								for (let source of this.state[varName].sources)
+								{
+									console.log("Updating source with", varName, msg.state[varName])
+									source.postMessage({
+										state: {
+											name: varName,
+											value: msg.state[varName]
+										}
+									})
+								}
+							}
+						}
+					}
+					if ("event" in msg)
+					{
+						let eventName = msg.event.name;
+						if (eventName in this.events)
+						{
+							for (let source of this.events[eventName].sources)
+							{
+								source.postMessage({
+									event: {
+										name: eventName,
+										payload: msg.event.payload
+									}
+								})
+							}
+						}
+					}
+				})
+
+				this.socket.addEventListener('open', () =>
+				{
+					console.log("Connected");
+					this.emit("connected", null);
+				});
+
+				this.socket.addEventListener('close', () =>
+				{
+					setTimeout(() =>
+					{
+						console.log("Connection Closed: Attempting Reconnect");
+						this.socket = null;
+						this.connect();
+					}, 1000);
+				});
+
+				this.socket.addEventListener('error', () =>
+				{
+					this.socket.close(); //Use close here instead so there's not a double reconnect.
+				});
+			}
+
+			on(event, func)
+			{
+				if (event in this.callbacks)
+				{
+					this.callbacks[event].push(func);
+				}
+				else
+				{
+					this.callbacks[event] = [func];
+				}
+			}
+
+			emit(event, payload)
+			{
+				if (event in this.callbacks)
+				{
+					for (let func of this.callbacks[event])
+					{
+						try
+						{
+							func(payload);
+						}
+						catch (err)
+						{
+							console.error(err);
+						}
+					}
+				}
+			}
+
+			createWidget(widget)
+			{
+				let name = widget.name;
+				console.log('Adding Frame for Widget ', name);
+
+				let frame = document.createElement('iframe')
+				frame.castMate = {};
+				frame.castMate.params = widget.properties || {};
+
+				frame.src = `/widgets/widget.html?widget=${name}`;
+				frame.classList.add('widget-container');
+				frame.style.position = 'absolute';
+				frame.style.left = widget.position.x;
+				frame.style.top = widget.position.y;
+				frame.style.width = widget.position.width;
+				frame.style.height = widget.position.height;
+
+				document.body.appendChild(frame);
+
+				this.widgets.push(frame);
+			}
+		}
+
+		const urlParams = new URLSearchParams(window.location.search);
+		const overlayName = urlParams.get('overlay');
+		const overlay = new OverlayBridge();
+
+		overlay.connect();
+
+		async function main()
+		{
+			let overlayData = await getOverlayData(overlayName);
+
+			for (let widget of overlayData)
+			{
+				overlay.createWidget(widget);
+			}
+		}
+		main();
+	</script>
 </body>
 
 </html>

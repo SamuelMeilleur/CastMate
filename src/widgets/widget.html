@@ -2,29 +2,118 @@
 
 <head>
 	<script src="https://unpkg.com/riot@4/riot+compiler.min.js"></script>
-	<script src="js/widget-bridge.js"> </script>
 </head>
 
 <body>
 	<widget />
 	<script>
+
+		function getWidgetSource(widgetName)
+		{
+			const promise = new Promise((resolve, reject) =>
+			{
+				var xhttp = new XMLHttpRequest();
+				xhttp.onreadystatechange = function ()
+				{
+					if (this.readyState == 4)
+					{
+						if (this.status == 200)
+						{
+							resolve(this.responseText)
+						}
+						else
+						{
+							reject(new Error(`Received status ${this.status}`));
+						}
+					}
+
+				};
+				xhttp.open("GET", `/widgets/${widgetName}/widget.riot`, true);
+				xhttp.send();
+			})
+			return promise;
+		}
+
+		function getWidgetParams()
+		{
+			const promise = new Promise((resolve, reject) =>
+			{
+				const onMessageFunc = (event) =>
+				{
+					if ("params" in event.data)
+					{
+						console.log("Params Received",event)
+						window.removeEventListener('message', onMessageFunc)
+						resolve(event.data.params);
+					}
+				}
+				window.addEventListener('message', onMessageFunc)
+				window.parent.postMessage({ params: null });
+			});
+			return promise;
+		}
+
 		const urlParams = new URLSearchParams(window.location.search);
 		const widgetName = urlParams.get('widget');
 
-		widget.init();
-
-		var xhttp = new XMLHttpRequest();
-		xhttp.onreadystatechange = function ()
+		async function main()
 		{
-			if (this.readyState == 4 && this.status == 200)
+			console.log(`Initializing ${widgetName} widget.`)
+			let source = await getWidgetSource(widgetName);
+			const compiledWidget = riot.compileFromString(source);
+
+			const widgetCode = compiledWidget.code;
+
+
+			console.log(`Compiled ${widgetName} widget.`)
+
+			const params = await getWidgetParams();
+
+			console.log(`Got ${widgetName} params.`, params)
+
+			riot.install((component) =>
 			{
-				const { code } = riot.compileFromString(this.responseText);
-				riot.inject(code, 'widget', './widget.html');
-				riot.mount('widget', widget.params);
-			}
-		};
-		xhttp.open("GET", `/widgets/${widgetName}/widget.riot`, true);
-		xhttp.send();
+				component.requestState = (stateArray) =>
+				{
+					window.parent.postMessage({
+						stateDependencies: stateArray
+					});
+				}
+			})
+
+			let widget = null;
+
+			window.addEventListener('message', (event) =>
+			{
+				if (!widget) return;
+
+				if (event.data.state)
+				{
+					console.log(`Widget Received ${event.data.state.name} update: `, event.data.state.value);
+					widget.update({
+						[event.data.state.name]: event.data.state.value
+					});
+				}
+				else if (event.data.event)
+				{
+					const eventName = event.data.event.name;
+					const eventData = event.data.event.data;
+
+					if (eventName in widget)
+					{
+						widget[eventName](eventData);
+					}
+				}
+			})
+
+			//Compile on the fly for now.
+
+			riot.inject(widgetCode, 'widget', './widget.html');
+
+			let widgets = riot.mount('widget', params);
+			widget = widgets[0];
+		}
+		main();
 	</script>
 </body>
 
