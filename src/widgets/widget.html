@@ -5,8 +5,30 @@
 </head>
 
 <body>
+
 	<widget />
 	<script>
+		function loadScript(scriptUrl)
+		{
+			const promise = new Promise((resolve, reject) =>
+			{
+				var script = document.createElement('script');
+				script.async = false;
+				script.defer = false;
+				script.src = scriptUrl;
+				script.onload = () =>
+				{
+					resolve();
+				};
+				script.onerror = () =>
+				{
+					reject();
+				};
+				document.getElementsByTagName('head')[0].appendChild(script);
+			})
+			return promise;
+		}
+
 
 		function getWidgetSource(widgetName)
 		{
@@ -42,7 +64,6 @@
 				{
 					if ("params" in event.data)
 					{
-						console.log("Params Received",event)
 						window.removeEventListener('message', onMessageFunc)
 						resolve(event.data.params);
 					}
@@ -63,7 +84,6 @@
 			const compiledWidget = riot.compileFromString(source);
 
 			const widgetCode = compiledWidget.code;
-
 
 			console.log(`Compiled ${widgetName} widget.`)
 
@@ -89,7 +109,6 @@
 
 				if (event.data.state)
 				{
-					console.log(`Widget Received ${event.data.state.name} update: `, event.data.state.value);
 					widget.update({
 						[event.data.state.name]: event.data.state.value
 					});
@@ -107,8 +126,14 @@
 			})
 
 			//Compile on the fly for now.
-
 			riot.inject(widgetCode, 'widget', './widget.html');
+
+			const exports = window.__riot_registry__.widget.exports;
+			if ("onWidgetLoad" in exports)
+			{
+				await exports.onWidgetLoad()
+			}
+
 
 			let widgets = riot.mount('widget', params);
 			widget = widgets[0];
